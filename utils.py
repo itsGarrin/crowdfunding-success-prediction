@@ -1,6 +1,16 @@
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+import statsmodels.api as sm
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score
+)
 from sklearn.metrics import roc_curve, roc_auc_score
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 
@@ -93,7 +103,8 @@ def plot_roc_curve(y_true, y_proba, model_name="Model"):
 
 
 def evaluate_models(
-    models: list, predictions_base: list, predictions_hyper: list, y_test: list
+        models: list, predictions_base: list, predictions_hyper: list, y_test: list,
+        task: str = 'classification'
 ) -> pd.DataFrame:
     """
     Compare the performance of base models and models with hyperparameter tuning.
@@ -109,14 +120,16 @@ def evaluate_models(
         List of predicted values from hyperparameter-tuned models.
     y_test : array-like.
         Ground truth (correct) labels for the test set.
+    task : str.
+        Type of evaluation ('classification' or 'regression').
 
     Returns:
     -------
     pd.DataFrame.
-        A DataFrame with detailed metrics including accuracy, precision, recall, and F1 score for both base and hyperparameter-tuned models.
+        A DataFrame with detailed metrics for both base and hyperparameter-tuned models.
     """
 
-    def compute_metrics(y_true, y_pred):
+    def compute_classification_metrics(y_true, y_pred):
         return {
             "Accuracy": accuracy_score(y_true, y_pred),
             "Precision": precision_score(y_true, y_pred),
@@ -130,18 +143,38 @@ def evaluate_models(
             "Negative F1 Score": f1_score(y_true, y_pred, pos_label=0),
         }
 
+    def compute_regression_metrics(y_true, y_pred):
+        return {
+            "Mean Absolute Error": mean_absolute_error(y_true, y_pred),
+            "Mean Squared Error": mean_squared_error(y_true, y_pred),
+            "Root Mean Squared Error": np.sqrt(mean_squared_error(y_true, y_pred)),
+            "R-squared": r2_score(y_true, y_pred)
+        }
+
+    # Check for input validity
+    if len(predictions_base) != len(models) or len(predictions_hyper) != len(models):
+        raise ValueError("The number of predictions must match the number of models.")
+
+    if len(y_test) == 0:
+        raise ValueError("y_test cannot be empty.")
+
     # Compute metrics for both types of models
-    all_metrics_base = {
-        model: compute_metrics(y_test, y_pred)
-        for model, y_pred in zip(models, predictions_base)
-    }
-    all_metrics_hyper = {
-        model: compute_metrics(y_test, y_pred)
-        for model, y_pred in zip(models, predictions_hyper)
-    }
+    all_metrics_base = {}
+    all_metrics_hyper = {}
+
+    for model, y_pred_base, y_pred_hyper in zip(models, predictions_base, predictions_hyper):
+        if task == 'classification':
+            all_metrics_base[model] = compute_classification_metrics(y_test, y_pred_base)
+            all_metrics_hyper[model] = compute_classification_metrics(y_test, y_pred_hyper)
+        elif task == 'regression':
+            all_metrics_base[model] = compute_regression_metrics(y_test, y_pred_base)
+            all_metrics_hyper[model] = compute_regression_metrics(y_test, y_pred_hyper)
+        else:
+            raise ValueError("Task must be either 'classification' or 'regression'.")
 
     # Initialize the DataFrame structure
-    metrics = list(compute_metrics(y_test, predictions_base[0]).keys())
+    metrics = list(all_metrics_base[models[0]].keys())
+
     results_base = pd.DataFrame(index=metrics, columns=models)
     results_hyper = pd.DataFrame(index=metrics, columns=models)
 
@@ -154,35 +187,83 @@ def evaluate_models(
     # Combine the base and hyperparameter-tuning results by concatenating vertically
     results_base["Type"] = "Base"
     results_hyper["Type"] = "Hyperparameter Tuning"
+
     results_combined = pd.concat([results_base, results_hyper])
+
     results_combined.reset_index(inplace=True)
     results_combined.rename(columns={"index": "Metric"}, inplace=True)
+
     results_combined.set_index(["Metric", "Type"], inplace=True)
 
     # Create a single summary column for both base and hyperparameter tuning
     summary_list = []
+
     for metric in metrics:
         base_values = results_combined.xs("Base", level=1).loc[metric]
         hyper_values = results_combined.xs("Hyperparameter Tuning", level=1).loc[metric]
 
-        max_base_value = base_values.max()
-        max_hyper_value = hyper_values.max()
-
-        if max_base_value >= max_hyper_value:
-            best_model = base_values.idxmax()
-            best_value = max_base_value
+        if task == 'regression' and metric == "R-squared":
+            best_value = max(base_values.max(), hyper_values.max())
+            best_model = base_values.idxmax() if base_values.max() >= hyper_values.max() else hyper_values.idxmax()
         else:
-            best_model = hyper_values.idxmax()
-            best_value = max_hyper_value
+            best_value = min(base_values.min(), hyper_values.min())
+            best_model = base_values.idxmin() if base_values.min() <= hyper_values.min() else hyper_values.idxmin()
 
         summary_list.append(
-            {"Metric": metric, "Best Model": best_model, "Highest Value": best_value}
+            {"Metric": metric, "Best Model": best_model, "Best Value": best_value}
         )
 
     summary_df = pd.DataFrame(summary_list)
+
     summary_df.set_index("Metric", inplace=True)
 
     # Combine the results_combined DataFrame with the summary DataFrame
     final_results = results_combined.join(summary_df)
 
     return final_results
+
+
+def plot_coefficients(ols_results: sm, highlight_vars=None, significance_level=0.05):
+    """
+    Plots the coefficients of an OLS model with p-values annotated.
+
+    Parameters:
+    ols_results: The fitted OLS model results from statsmodels.
+    highlight_vars: List of variable names to highlight in the plot.
+    significance_level: The p-value threshold for statistical significance.
+    """
+
+    # Create a DataFrame for coefficients and p-values
+    coef_df = pd.DataFrame({
+        'coefficients': ols_results.params.drop('const'),
+        'pvalues': ols_results.pvalues.drop('const')
+    })
+
+    # Sort by absolute value of coefficients
+    coef_df['abs_coeff'] = coef_df['coefficients'].abs()
+    coef_df = coef_df.sort_values(by='abs_coeff')
+
+    # Highlight significant coefficients
+    significant = coef_df['pvalues'] < significance_level
+
+    plt.figure(figsize=(10, 7))
+    bars = plt.bar(coef_df.index, coef_df['coefficients'], color=['red' if sig else 'blue' for sig in significant])
+    plt.axhline(0, color='k', linestyle='--')
+    plt.title('OLS Coefficients with Significance Highlighted')
+
+    # Annotate p-values on the bars
+    for i, bar in enumerate(bars):
+        yval = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width() / 2, yval, f"{coef_df['pvalues'].iloc[i]:.3f}", ha='center', va='bottom')
+
+    # Highlight specific variables
+    if highlight_vars is not None:
+        for i, bar in enumerate(bars):
+            if coef_df.index[i] in highlight_vars:
+                bar.set_color('orange')
+
+    plt.xticks(rotation=45)
+    plt.ylabel('Coefficient Value')
+    plt.tight_layout()  # Adjust layout to prevent clipping
+    plt.show()
+
