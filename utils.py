@@ -103,7 +103,7 @@ def plot_roc_curve(y_true, y_proba, model_name="Model"):
 
 
 def evaluate_models(
-        models: list, predictions_base: list, predictions_hyper: list, y_test: list,
+        models: list, predictions_base: list, predictions_hyper: list, X: pd.DataFrame, y_test: list,
         task: str = 'classification'
 ) -> pd.DataFrame:
     """
@@ -148,7 +148,8 @@ def evaluate_models(
             "Mean Absolute Error": mean_absolute_error(y_true, y_pred),
             "Mean Squared Error": mean_squared_error(y_true, y_pred),
             "Root Mean Squared Error": np.sqrt(mean_squared_error(y_true, y_pred)),
-            "R-squared": r2_score(y_true, y_pred)
+            "R-squared": r2_score(y_true, y_pred),
+            "Adjusted R-squared": 1 - (1-r2_score(y_true, y_pred))*(len(y_true)-1)/(len(y_true)-X.shape[1]-1)
         }
 
     # Check for input validity
