@@ -203,7 +203,7 @@ def evaluate_models(
         base_values = results_combined.xs("Base", level=1).loc[metric]
         hyper_values = results_combined.xs("Hyperparameter Tuning", level=1).loc[metric]
 
-        if task == 'regression' and metric == "R-squared":
+        if task == 'regression' and metric == "R-squared" or metric == "Adjusted R-squared":
             best_value = max(base_values.max(), hyper_values.max())
             best_model = base_values.idxmax() if base_values.max() >= hyper_values.max() else hyper_values.idxmax()
         else:
