@@ -17,4 +17,4 @@ This project aims to predict the fraction of a funding goal that a crowdfunding 
 
 1. Clone the repository:
    ```bash
-   git clone [<repo-url>](https://github.com/itsGarrin/crowdfunding-success-prediction.git)
+   git clone https://github.com/itsGarrin/crowdfunding-success-prediction.git
